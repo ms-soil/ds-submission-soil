@@ -48,7 +48,7 @@ as_tibble(eusoil) # overview of data structure
 ## (II a) Data preparation
 
 Analysis was don with R version 4.0.3.
-Land use in the data set is not straightforward. It is decoded in the LC1-variable, so we detect the sting and use its explanation from the data-set documentation, which can be found at https://github.com/ms-soil/ds-submission-soil (data-info.pdf). After this we remove the LC1-variable. We further check whether there are any observations without organic carbon (OC) and take a look at how many observations we have for each land use. In this step, we finally factorize land use.
+Land use as a variable in the data set is not straightforward. It is decoded in the LC1-variable, so we detect the capital letter in the variable character string and assign the respective land use from the data-set documentation, which can be found at https://github.com/ms-soil/ds-submission-soil (data-info.pdf). After this we remove the LC1-variable. We further check whether there are any observations where organic carbon (OC) is missing and take a look at how many observations we have for each land use. For further analysis, land use will be turned into a factor.
 
 ```{r, echo = T}
 eusoil <- eusoil %>% mutate(landuse = case_when(str_detect(LC1, "A") ~ "artif_land",
@@ -74,7 +74,7 @@ eusoil <- eusoil %>% mutate(landuse = as.factor(landuse))
 
 ## (II b) Variable selection
 
-We want to use a complete data set for our predictions, so we exclude variables where we don't have all observation. We can see it with this code. It yields that we are missing the texture variables in over 80% of cases.
+We want to use a complete data set for our predictions, so we exclude variables that are often missing. We can see it with the following code. It yields that we are missing the texture variables (sand, silt, clay) in over 80% of cases.
 ```{r, echo = T, results = "hide"}
 # print availability for every variable
 res <- for (i in 1:length(names(eusoil))) { 
@@ -102,15 +102,15 @@ Here is a bit of the result:
 # [1] "Silt"
 ```
 
-
-The texture variables clay, sand and silt are not often measured in this data set so we exclude them, as well as some other variables that are not commonly measured by soil scientists or not clearly defined:
+The texture variables clay, sand and silt are not often measured in this data set so we exclude them. We also exclude other variables that are not commonly measured by soil scientists or not clearly defined:
 
 ```{r, echo = T}
 eusoil <- eusoil %>% select(-Clay, -Sand, -Silt, -EC, -pH.CaCl2., -Soil_Stones, -LC1_Desc) %>% 
   select(OC, N, P, K, CaCO3, pH.H2O., Elevation, landuse)
 ```
 
-What variables are left and how do they relate. We want to draw some conclusions of what to include by looking at a correlation plot.
+What variables are left and how do they relate? We want to draw some conclusions of what to include by looking at a correlation plot.
+
 ```{r, echo = T, message = F, results = "hide"}
 #### variable selection III: influential variables ####
 names(eusoil)
@@ -118,14 +118,18 @@ names(eusoil)
 relationships <- plot(eusoil[1:2000,]) # plotting the first 2000 observations
 relationships
 ```
-P (phosphorus), K (potassium) show no clear relationship to organic carbon so we will exclude them soon. CaCO3 and pH are co-dependend so it will be enough to include one of them. What remains at this point is N (Nitrogen), pH and elevation.
 
-There is also a categorical variable, land use and want to see whether it influences organic carbon:
+P (phosphorus) and K (potassium) show no clear relationship to organic carbon so we will exclude them soon in the code below. CaCO3 and pH are co-dependend so it will be enough to include one of them. Thus we are keeping N (Nitrogen), pH and elevation in our analysis
+
+There is also a categorical variable, land use, so we check whether it influences organic carbon:
+
 ```{r, echo = T}
 qplot(landuse, OC, data = eusoil, fill = landuse) + geom_boxplot() + 
   ylab("organic carbon mg C / g soil")
 ```
-Landuse plays a role so we keep it. Finally, we give out some easier-to-type variable names and select what we found important
+
+Organic carbon differs with land use so we keep it as a factor. Now that the decision on the variables to consider has been made, we give out some easier-to-type variable names and select the chosen variables from the data set.
+
 ```{r, echo = T}
 eusoil <- eusoil %>% mutate(pH = pH.H2O., elev = Elevation) %>% 
   select(OC, N, P, pH, elev, landuse)
@@ -133,7 +137,7 @@ eusoil <- eusoil %>% mutate(pH = pH.H2O., elev = Elevation) %>%
 
 ## (II c) Data set division into validation, train and test set
 
-First, from the created data, a validation set of 10% is taken so we have a large proportion of the data for model training. The training set will be 80% and the test set 20% of the remaining data. We should choose a split that allows lots of training but still a representative test set. For reproducible results in drawing, we use the set.seed() function.
+First, from our data set, a validation set of 10% is taken which will only be used after deciding on a model. The validation set is important so that our model will not be fit to a specific data set. We keep a large proportion of the data for model training. The training set will be 80% and the test set 20% of the remaining data. We should choose a split that allows lots of training but still a representative test set. For reproducible results, we use the set.seed() function.
 
 ```{r, echo = T, warning = F}
 set.seed(1, sample.kind = "Rounding")
@@ -149,11 +153,12 @@ testset <- temp[testindex,]
 # see how many observations are in each
 nrow(trainset); nrow(testset); nrow(validation)
 ```
-Over 2000 obervations for final validation set should be plenty.
+The split retains 2000 obervations for final validation set which should be plenty.
 
 ## (II d) RMSE function
 
-A rooted mean square error (RMSE) function is used to evaluate the performance of the models that will be set up.
+A rooted mean square error (RMSE) function is used to evaluate the performance of the models that will be set up. It can be viewed as the typical error we make when predicting from a given model.
+
 ```{r, echo = T}
 RMSE <- function(observed_values, predicted_values){
   sqrt(mean((observed_values - predicted_values)^2))
@@ -162,7 +167,7 @@ RMSE <- function(observed_values, predicted_values){
 
 
 ## (II e) Reference model
-A reference model can be useful to evaluate, how different the models perform from simply guessing, or taking the average of the observed carbon values.
+A reference model can be useful to evaluate how different models perform compared to simply guessing the outcome. In guessing, we would take the average of the observed carbon values.
 
 ```{r echo = T, fig.height=3, fig.width=3}
 #### guessing model ####
@@ -175,13 +180,13 @@ rmse_mu
 rmses <- data.frame(model = "mean", rmse = rmse_mu)
 rmses
 ```
-So if we guess, we are typically ~78 mg C / g soil off. We will improve this prediction, first with linear models but also with the KNN and random forest algorithms.
 
-
+We see that if we guess, we are typically ~78 mg C / g soil off the observed value. We will improve this prediction, first with linear models but also with KNN and random forest algorithms.
 
 
 ## (II f) Linear models
-In the following, I try different linear models, first with N (nitrogen), then adding pH, elevation and landuse. The full code is present in the R script, to not overwhelm the report, I show the model with all these variables and the table of how RMSE impoved step by step.
+
+In the following, different linear models (LM) are set up, first with N (nitrogen) as predictor, then adding pH, elevation and landuse. The full code is present in the R script and not shown here as to not overload the report, However, we show the LM which includes all variables and the table of how RMSE impoved step by step when adding more variables.
 
 ```{r, include = F}
 #### LM with N (Nitrogen) ####
@@ -265,8 +270,10 @@ rmses
 \newpage
 
 ## (II g) KNN models
-Since all variables appeared to improve the model, I also include these in a KNN model, which looks multidimensionally at the nearest neighbors of an observation and predicts from there.
-A first try including elevation yields a less-than-optimal result (see RMSE table below), but excluding elevation worked well. I could not immediately detect the reason for this, but my conclusion is that not every variable improves every type of model in the same way. Generally, knn performed well after improving on the number of neighbors with a sapply() function.
+
+Since all variables appeared to improve the LM model above, we also include these in a KNN model, which looks multidimensionally at the nearest neighbors of an observation and predicts from there.
+
+A first try with KNN including elevation yields a less-than-optimal result (see RMSE table below). Another model which excludes elevation worked well. I could not immediately detect the reason for this, but my conclusion is that not every variable improves every type of model in the same way. Generally, KNN performed well after improving on the number of neighbors with a sapply() function.
 
 ```{r, include = F}
 #### KNN [caret] with N, pH, elevation, landuse ####
@@ -326,7 +333,11 @@ result <- lapply(ks, function(i){
 })
 
 plot(ks, result)
+```
 
+The graph above shows different k's (numbers of neighbors considered) and how the result (the RMSE) behaves with this. A k of 17 was used because it yields the best result.
+
+```{r, echo = T}
 best_k <- ks[which.min(data.frame(result)[1,])] #31
 best_k # this is 17
 
@@ -349,7 +360,7 @@ rmses
 
 ## (II h) Random forest model
 
-A random forest model consists of many models (trees) that are combined (to a forest) so the number of trees plays a role. The more trees the more exact the model usually is, but it then also takes more time to calculate. Here, I started with 10 trees, then tried 100, then 250 and then 500. The number of trees (ntree = x) of 250 appeard to yield a good compromise between computing time and performance. The best model also includes all variables, unlike KNN did.
+A random forest model consists of many models (trees) that are combined (to a forest) so the number of trees plays a role in the performance of the model. The more trees the more exact the model usually is, but with more trees it also takes more time to calculate. Here, I started with 10 trees, then tried 100, then 250 and then 500. The number of trees (ntree = x) of 250 appeared to yield a good compromise between computing time and performance. The best model includes all selected variables, unlike KNN, which performed best without elevation.
 
 ```{r echo = T, fig.height=3, fig.width=3}
 set.seed(1)
@@ -379,7 +390,8 @@ rmses
 ```
 
 ## (II i) Ensemble model (KNN and random forest)
-The best two models were combined into an ensemble, where the mean is taken from the prediction of both. This works well as it improves the RMSE again:
+
+The two models with the best performance (lowest RMSE), were combined into an ensemble, where the mean is taken from the prediction of both models. This worked well as it further improved the RMSE:
 
 ```{r echo=T, fig.height=3, fig.width=3}
 pred_ensemble <- (pred7 + pred8)/2 # knn & random forest 
@@ -398,7 +410,7 @@ rmses <- rbind(rmses,
 
 ## (III a) RMSEs of tested models
 
-As a result, we have an order of performance from best to least performing model that is Ensemble > KNN > Random forest > linear model.
+As a result, we see an order of performance from best to least performing model that is Ensemble (KNN & random forest) > KNN > random forest > linear model.
 
 Here's the overview table:
 
@@ -408,7 +420,7 @@ rmses
 
 ## (III b) Evaluation of best model on validation set
 
-I now predict organic Carbon in the validation set with the best two models: KNN without elevation and Random forest with all variables.
+To finally evaluate performance of our model on an unseen dataset, we now predict organic carbon in the validation set with the best two models: KNN without elevation and random forest with all variables. It is done as an ensemble.
 
 ```{r echo = T, fig.height=3, fig.width=5}
 # incorporate the mean prediction of knn and rf since they are the best ones
@@ -434,7 +446,7 @@ fin_rmse
 
 # (III b) Model performance in the most common range of organic carbon
 
-
+In the observation-prediction-graph above, we see that there are ranges of organic where the model performes better than in other ranges. We can divide the validation set into 3 ranges that appear to differ and calculate model performance for each. This can be interesting in practical regards as the user may be interested in certain soils that lay within a specific range of organic carbon.
 
 
 # (IV) CONCLUSION 
