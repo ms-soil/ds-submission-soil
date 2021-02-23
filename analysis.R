@@ -1,26 +1,23 @@
-#### read in data ####
+#### PART 1 - read in data ####
+load(url("https://github.com/ms-soil/ds-submission-soil/raw/main/eusoil.Rdata"))
 
-# eusoil <- read.csv("P:\\r\\projects\\ex-data\\LUCAS2015_topsoildata_20200323\\LUCAS_Topsoil_2015_20200323.csv")
-# as_tibble(eusoil)
-# names(eusoil)
-# unique(eusoil$LC0_Desc)
-# eusoil <- eusoil %>% select(Clay, Sand, Silt, pH.CaCl2., pH.H2O., EC, OC, CaCO3, P, N, K, Elevation, Soil_Stones, LC1, LC1_Desc)
-# save(eusoil, file="ds-pt-9-capstone/b-data/eusoil.Rdata")
-
-#### load & inspect data ####
+#### PART 2- load packages ####
 if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
 if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(randomForest)) install.packages("randomForest", repos = "http://cran.us.r-project.org")
 
 library(caret)
 library(tidyverse)
+library(randomForest)
 
-load("b-soildata/data/eusoil.Rdata")
+# taking a first look at the dataset
+names(eusoil) # variable names
+dim(eusoil) # data set dimensions
+as_tibble(eusoil) # overview of data structure
 
-names(eusoil)
-dim(eusoil)
-str(eusoil)
-
-# generalize landuses
+#### PART 3 - data preparation ####
+# creating landuse categories from the LC1 variable and deleting the LC1 variable afterwards
+# this info (data-info.pdf) can be found at https://github.com/ms-soil/ds-submission-soil
 eusoil <- eusoil %>% mutate(landuse = case_when(str_detect(LC1, "A") ~ "artif_land",
                                                 str_detect(LC1, "B") ~ "cropland",
                                                 str_detect(LC1, "C") ~ "woodland",
@@ -40,53 +37,50 @@ table(eusoil$landuse)
 # factorize landuse
 eusoil <- eusoil %>% mutate(landuse = as.factor(landuse))
 
-# check what variables are left
-names(eusoil)
+#### PART 4 - variable selection ####
+#### Variable selection I: choose variables which are available in most observations ####
 
-#### variable selection I: choose variables which are available in >80% of cases ####
-
-res <- for (i in 1:length(names(eusoil))) { # for all variables
+# print availability for every variable
+res <- for (i in 1:length(names(eusoil))) { 
   print(table(!is.na(eusoil[,i])))
   print(names(eusoil[i]))
 }
 # texture (the silt, sand and clay variables) are only available in a fraction of cases
-# Note: either all texture classes are available or none
+# see which fraction of the dataset misses texture 
 condition <- !is.na(eusoil$Clay)
 table(condition)[[1]]/(table(condition)[[1]] + table(condition)[[2]])
-# Texture is missing in 80.5% of cases
+# texture is missing in 80.5% of cases
 
-#### variable selection II: remove variables that are often NA, not common or not clearly defined ####
+#### variable selection II: remove variables that are often NA, not commonly measured or not clearly defined ####
 eusoil <- eusoil %>% select(-Clay, -Sand, -Silt, -EC, -pH.CaCl2., -Soil_Stones, -LC1_Desc) %>% 
   select(OC, N, P, K, CaCO3, pH.H2O., Elevation, landuse)
 
-#### variable selection III: incluential variables ####
+#### variable selection III: influential variables ####
 names(eusoil)
-str(eusoil)
-## a) numerical variables that correlate with OC but not with each other
-relationships <- plot(eusoil[1:2000,]) # all relationships, takes time to run
+## a) numerical variables that correlate with organic carbon but not with each other
+relationships <- plot(eusoil[1:2000,]) # plotting the first 2000 observations
 relationships
-# P, K with no clear relationship
-# CaCO3 and pH co-dependend -> take pH as it is most common
-# remaining: N, pH & elevation
+# P (phosphorus), K (potassium) with no clear relationship to organic carbon
+# CaCO3 and pH co-dependend -> take pH as it is more common and can represent both
+# remaining: N, pH, & elevation
 
-
-## b) categorical variables that show differences in OC
+## b) categorical variables that show differences in organic carbon
 # landuseis the only factor now
-# overview of OC (organic carbon) in landuses)
-qplot(landuse, OC, data = eusoil, col = landuse) + geom_boxplot()
-range(eusoil$OC)
-# remaining overall: N, pH, elevation and landuse
+# overview of OC (organic carbon) in landuses
+qplot(landuse, OC, data = eusoil, fill = landuse) + geom_boxplot()  + ylab("organic carbon mg C / g soil")
+# remaining overall now: N, pH, elevation and landuse
 
-dim(eusoil)
-
+# give some easier names and select the chosen variables
 eusoil <- eusoil %>% mutate(pH = pH.H2O., elev = Elevation) %>% 
   select(OC, N, P, pH, elev, landuse)
-
 dim(eusoil)
 
+
+#### PART 5 - train set / test set / validation set####
 #### create training, test and hold-out test set (validation) ####
 
 # create validation set
+# I used 10% so I have a large amount of data for training
 set.seed(1, sample.kind = "Rounding")
 valindex <- createDataPartition(eusoil$OC, p = 0.1, list = F)
 temp <- eusoil[-valindex,]
@@ -100,45 +94,53 @@ testindex <- createDataPartition(temp$OC, p = 0.2, list = F)
 trainset <- temp[-testindex,]
 testset <- temp[testindex,]
 
+# see how many observations are in each
 nrow(trainset); nrow(testset); nrow(validation)
 
-#### RMSE function ####
+#### PART 6 - RMSE function ####
+# created so that the models can be evaluated thoughout the project
 RMSE <- function(observed_values, predicted_values){
   sqrt(mean((observed_values - predicted_values)^2))
 }
+
+#### PART 7 - Linear models (LM) ####
 
 #### guessing model ####
 mu <- mean(trainset$OC)
 head(mu)
 
+# here I plot observations vs. predictions
 qplot(testset$OC, mu)
 rmse_mu <- RMSE(testset$OC, mu)
 rmse_mu
 
+# create an RMSE table to always add the RMSEs
 rmses <- data.frame(model = "mean", rmse = rmse_mu)
 rmses
 
-#### lm with N ####
+#### LM with N (Nitrogen) ####
 
 m1 <- lm(OC ~ N, data = trainset) 
 
+# the base will be the testset as a dataframe to predict on
 base <- data.frame(testset)
-
 pred1 <- predict(m1, base)
 head(pred1)
 
+# view predictions
 qplot(testset$OC, pred1, col = testset$landuse)
 
-
-# get rmse
+# get RMSE
 rmse1 <- RMSE(testset$OC, pred1)
 rmse1
 
+# add RMSE to RMSE table
 rmses <- rbind(rmses, 
                data.frame(model = "lm with N", rmse = rmse1))
 rmses
 
-#### lm with N, pH #### 
+#### LM with N, pH #### 
+# for comments on the steps, see above
 
 m2 <- lm(OC ~ N + pH, data = trainset)
 summary(m2)
@@ -156,8 +158,7 @@ rmses <- rbind(rmses,
 rmses
 
 
-
-#### lm with N, pH, elevation ####
+#### LM with N, pH, elevation ####
 
 m3 <- lm(OC~N + pH + elev, data = trainset)
 summary(m3)
@@ -171,9 +172,8 @@ qplot(testset$OC, pred3)
 rmse3 <- RMSE(testset$OC, pred3)
 
 rmses <- rbind(rmses, 
-               data.frame(model = "lm with N + pH + Elev.", rmse = rmse3))
+               data.frame(model = "lm with N + pH + elev.", rmse = rmse3))
 rmses
-
 
 
 #### lm with N, pH, elevation, landuse ####
@@ -195,30 +195,15 @@ rmses <- rbind(rmses,
 rmses
 
 
-#### INTERLUDE: finding the outliers at the large OC values ####
-plot_all_landuses <- testset %>% mutate(prediction = pred4) %>% 
-  ggplot(aes(OC, prediction)) +
-  geom_point(aes(col = landuse)) + 
-  scale_color_brewer()
-plot_all_landuses
-
-# excluding water and wetland 
-plot_test <- testset %>% mutate(prediction = pred4) %>% 
-  filter(!(landuse %in% c("water", "wetland"))) %>% 
-  ggplot(aes(OC, prediction)) +
-  geom_point(aes(col = landuse)) + 
-  scale_color_brewer()
-plot_test
-
-## appears to have little effect
-
 #### INTERMDEDITATE RESULT: include all variables in fancier algorithms ####
 
-#### knn [caret] all variables ####
+#### PART 8 - KNN ####
+#### KNN [caret] with N, pH, elevation, landuse ####
 # as a rule of thumb, sqrt of observations:
 sqrt(nrow(trainset)) # = 125
 
-ks <- seq(10,30,1)
+# after some trials, the following range of ks were found useful
+ks <- seq(1,15,1)
 ks
 
 # checking which is the optimal k
@@ -232,10 +217,11 @@ data.frame(result)[1,]
 plot(ks, result)
 
 best_k <- ks[which.min(data.frame(result)[1,])] #31
-best_k # this is 10
+best_k # this is 3
 # it appears a better k is lower but I don't want to depend on too few points as this
 # may lead to overtraining
 
+best_k <- 10
 
 ## using best k
 
@@ -253,9 +239,9 @@ rmses
 # elevation showed to be the problem
 
 
-#### knn [caret] all variables / excl. elevation ####
-# as a rule of thumb, sqrt of observations:
-sqrt(nrow(trainset)) # = 125
+#### KNN [caret] all variables / excl. elevation ####
+
+sqrt(nrow(trainset)) 
 
 ks <- seq(10,30,1)
 ks
@@ -286,40 +272,16 @@ rmses <- rbind(rmses,
                data.frame(model = "knn excluding elev.", rmse = rmse7))
 rmses
 
-# short exploration why elevation messes things up:
-qplot(landuse, elev, data = trainset)
-qplot(elev, OC, data = trainset)
-# no very clear reason immediately obvious
-# try once more a linear model excluding elevation:
+# without elevation, the KNN model works fine, It was not immediately clear why
 
-#### lm with N, pH, elevation, landuse ####
-
-m5 <- lm(OC ~ N + pH + landuse, data = trainset)
-summary(m5)
-
-base <- data.frame(testset)
-
-pred5 <- predict(m5, base)
-head(pred5)
-
-qplot(testset$OC, pred5)
-rmse5 <- RMSE(testset$OC, pred5)
-rmse5
-
-rmses <- rbind(rmses, 
-               data.frame(model = "lm excluding elev.", rmse = rmse5))
-rmses
-
-## we keep elevation in the linear model but took it out for knn
 
 #### INTERMEDIATE RESULT ####
 # The same parameters may not be the best for every model type
 
 
 
-#### random forest regression with all variables ####
-
-library(randomForest)
+#### PART 9 - Random forest ####
+#### Random forest [caret] with all variables ####
 
 set.seed(1)
 
@@ -334,6 +296,7 @@ fit_rf <- randomForest(
 pred8 <- predict(fit_rf, base)
 head(pred8)
 
+qplot(testset$OC, pred8)
 rmse8 <- RMSE(testset$OC, pred8)
 rmse8
 
@@ -347,23 +310,24 @@ rmses
 
 
 
-#### use ensemble to predict ####
-
-pred_ensemble <- (pred7 + pred8)/2 # knn and random forest with N, pH and landuse
+#### PART 10 - ENSEMBLE ####
+# use ensemble to predict 
+# that is, using the best 2 models and taking a mean of their prediction
+pred_ensemble <- (pred7 + pred8)/2 # knn & random forest 
 
 qplot(testset$OC, pred_ensemble)
 rmse_ens1 <- RMSE(testset$OC, pred_ensemble)
 rmse_ens1
 
 rmses <- rbind(rmses, 
-               data.frame(model = "ensemble knn rf", rmse = rmse_ens1))
+               data.frame(model = "ensemble of knn & rf", rmse = rmse_ens1))
 rmses
 
 
-#### hold-out testset #### # final validation
+#### PART 11 - VALIDATION #### 
+# final validation on hold-out validation set
 
 # incorporate the mean prediction of knn and rf since they are the best ones
-
 
 fin_predict_a <- predict(fit_knn2, validation)
 fin_predict_b <- predict(fit_rf, validation)
@@ -375,18 +339,26 @@ qplot(validation$OC, fin_predict, col = validation$landuse)
 fin_rmse <- RMSE(validation$OC, fin_predict)
 fin_rmse
 
-#### CONCLUSIONS ####
+rmses <- rbind(rmses, 
+               data.frame(model = "FINAL RMSE OVERALL", rmse = fin_rmse))
+rmses
+
+#### CONCLUSION I ####
 # not every parameter fits into every model
 # model specifications such as k (knn) or ntree (randomforest) are important
-# ensembles may improve the model
+# ensembles can improve a prediction
 
-#### APPDX ####
-# how well does the model perform in a certain range, optically divide
+#### PERFORMANCE in ranges of organic carbon ####
+# There were ranges of good and less good performances of the model:
+# Wow well does the model perform in a certain range, so I divide
 # set into 0-200 / 200-400 / 400+ (mg per g organic carbon)
 
+# I put the observations, predictions and land uses in a data frame
 df <- data.frame(landuse = validation$landuse,
                  observation = validation$OC, prediction = fin_predict)
 
+# in the following, I divide this set and observe the model performance on
+# data ranges
 
 # range 0-150
 obs  <- df$observation[df$observation < 150]
@@ -397,7 +369,7 @@ fin_rmse_0_150
 
 # how many observations are in that range
 length(eusoil$OC[eusoil$OC < 150]) / 
-length(eusoil$OC[eusoil$OC])
+  length(eusoil$OC[eusoil$OC])
 # it is 95% of observations
 
 # range 150-400
@@ -416,51 +388,31 @@ fin_rmse_400_plus
 
 
 rmses <- rbind(rmses, 
-               data.frame(model = "final rmse overall", rmse = fin_rmse),
-               data.frame(model = "final_rmse range <150 mg/g org. C", rmse = fin_rmse_0_150),
-               data.frame(model = "final_rmse range 150-400 mg/g org. C", rmse = fin_rmse_150_400),
-               data.frame(model = "final_rmse range 400+ mg/g org. C", rmse = fin_rmse_400_plus))
+               data.frame(model = "range <150 mg/g org. C", rmse = fin_rmse_0_150),
+               data.frame(model = "range 150-400 mg/g org. C", rmse = fin_rmse_150_400),
+               data.frame(model = "range 400+ mg/g org. C", rmse = fin_rmse_400_plus))
 rmses
 
 
-#### Relative error in range <150 mg/g carbon ####
-df %>% filter(observation < 150) %>% mutate(error = observation - prediction) %>%
+#### Relative error in the typical range of <150 mg/g carbon ####
+# I calculate how many percent on average the prediction is wrong, relative to the
+# amount of organic carbon really present
+df %>% filter(observation < 150) %>% 
   mutate(error_relative_pc = abs(observation - prediction) / observation * 100) %>% 
   summarize(relative_mean_error = sum(error_relative_pc)/n())
-# this is 35%
+# this is a 35% deviation from the observed value
 
-#### Error per landuse in the range <150 mg/g carbon ####
-as_tibble(df)
+#### Absolute error per landuse in the range <150 mg/g carbon ####
 df %>% filter(observation < 150) %>% mutate(error = observation - prediction) %>%
-  mutate(observationclass = round(observation, -1)) %>% # rounding to nearest 10 
-  ggplot(aes(landuse, error, col = landuse, alpha = observationclass)) +
+  ggplot(aes(landuse, error, col = landuse)) +
   geom_hline(yintercept = 0)+ geom_point() + geom_jitter(width = 0.3) +
-  theme_bw()
+  theme_bw() + ylab("Absolute error in predicted organic Carbon in mg C/g soil") +
+  xlab("Land use") + theme(legend.position = "none")  
 
-
-#### Relative error per landuse in the range <150 mg/g carbon ####
-as_tibble(df)
-df %>% filter(observation < 150) %>% mutate(error = observation - prediction) %>%
-  mutate(error_relative_pc = (observation - prediction) / observation * 100) %>% 
-  mutate(observationclass = round(observation, -1)) %>% # rounding to nearest 10 
-  ggplot(aes(landuse, error_relative_pc, col = landuse, alpha = observationclass)) +
-  geom_hline(yintercept = 0)+ geom_point() + geom_jitter(width = 0.3) +
-  theme_bw() 
-
-df %>% filter(observation < 150) %>% mutate(error = observation - prediction) %>%
-  mutate(error_relative_pc = (observation - prediction) / observation * 100) %>% 
-  mutate(observationclass = round(observation, -1)) %>% # rounding to nearest 10 
-  ggplot(aes(landuse, error_relative_pc, col = landuse, alpha = observationclass)) +
-  geom_hline(yintercept = 0)+ geom_point() + geom_jitter(width = 0.3) +
-  theme_bw() + ylim(c(-100,100))
-# removed 108 points of
-nrow(df) # 2187
-# points
-
-#### CONCLUSION ####
+#### CONCLUSION II ####
 # For the range of organic C of 0-150 mg/g C, we can predict with
 # a typical error of 10.2 mg/g C, done through an ensemble of random forest
-# and knn predictions. This is error is 35% of the observed organic C on average.
+# and knn predictions. The deviation from the observed value is on averag 35% of the observed organic C.
 # We used total P, pH, elevation and landuse for this prediction.
 
 
