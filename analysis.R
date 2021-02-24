@@ -334,7 +334,8 @@ fin_predict_b <- predict(fit_rf, validation)
 
 fin_predict <- (fin_predict_a + fin_predict_b) / 2
 
-qplot(validation$OC, fin_predict, col = validation$landuse)
+qplot(validation$OC, fin_predict, col = validation$landuse) +
+  geom_vline(xintercept = 150, lty = 2) + geom_vline(xintercept = 400, lty = 2) 
 
 fin_rmse <- RMSE(validation$OC, fin_predict)
 fin_rmse
@@ -387,32 +388,26 @@ fin_rmse_400_plus <- RMSE(obs, pred)
 fin_rmse_400_plus
 
 
-rmses <- rbind(rmses, 
+rmses <- rbind( 
                data.frame(model = "range <150 mg/g org. C", rmse = fin_rmse_0_150),
                data.frame(model = "range 150-400 mg/g org. C", rmse = fin_rmse_150_400),
                data.frame(model = "range 400+ mg/g org. C", rmse = fin_rmse_400_plus))
 rmses
 
 
-#### Relative error in the typical range of <150 mg/g carbon ####
-# I calculate how many percent on average the prediction is wrong, relative to the
-# amount of organic carbon really present
-df %>% filter(observation < 150) %>% 
-  mutate(error_relative_pc = abs(observation - prediction) / observation * 100) %>% 
-  summarize(relative_mean_error = sum(error_relative_pc)/n())
-# this is a 35% deviation from the observed value
-
 #### Absolute error per landuse in the range <150 mg/g carbon ####
 df %>% filter(observation < 150) %>% mutate(error = observation - prediction) %>%
   ggplot(aes(landuse, error, col = landuse)) +
-  geom_hline(yintercept = 0)+ geom_point() + geom_jitter(width = 0.3) +
-  theme_bw() + ylab("Absolute error in predicted organic Carbon in mg C/g soil") +
-  xlab("Land use") + theme(legend.position = "none")  
-
+  geom_hline(yintercept = 0)+ geom_jitter(alpha = 0.5) +
+  theme_bw() + ylab("Absolute error in predicted organic carbon in mg C/g soil") +
+  xlab("Land use") + theme(legend.position = "none") +
+  annotate(geom = "text", label = "underestimating", x = 1.5, y = 75, col = "darkgreen") +
+  annotate(geom = "text", label = "overestimating", x = 1.5, y = -75, col = "darkgreen") 
+  
 #### CONCLUSION II ####
 # For the range of organic C of 0-150 mg/g C, we can predict with
 # a typical error of 10.2 mg/g C, done through an ensemble of random forest
-# and knn predictions. The deviation from the observed value is on averag 35% of the observed organic C.
+# and knn predictions. 
 # We used total P, pH, elevation and landuse for this prediction.
 
 
